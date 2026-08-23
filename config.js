@@ -16,8 +16,8 @@
    vem do Row Level Security (RLS) configurado nos arquivos .sql.
    ==================================================================== */
 
-window.RITTUS_SUPABASE_URL = "https://SEU-PROJETO.supabase.co";
-window.RITTUS_SUPABASE_ANON_KEY = "SUA-CHAVE-ANON-AQUI";
+window.RITTUS_SUPABASE_URL = "https://pahobnxwpvpdripdygox.supabase.co";
+window.RITTUS_SUPABASE_ANON_KEY = "sb_publishable_aILsQwyQOaa-CwjStp9oew_ryDK6wb4";
 
 window.RITTUS_CONFIGURADO =
   window.RITTUS_SUPABASE_URL.indexOf("https://") === 0 &&
