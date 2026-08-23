@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RITTUS ONE — Acesso</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #f4f5f7; }
+    .card { background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 100%; max-width: 400px; }
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: #111; }
+    p { color: #666; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    label { display: block; font-size: 0.85rem; font-weight: 600; margin-top: 1rem; color: #333; }
+    input { width: 100%; padding: 0.75rem; margin-top: 0.25rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; }
+    button { width: 100%; padding: 0.75rem; margin-top: 1.5rem; background: #0052cc; color: #fff; border: none; border-radius: 4px; font-size: 1rem; font-weight: 600; cursor: pointer; }
+    button:hover { background: #003e9e; }
+    .toggle { text-align: center; margin-top: 1rem; font-size: 0.9rem; color: #555; }
+    .toggle a { color: #0052cc; text-decoration: none; font-weight: 600; cursor: pointer; }
+    .hidden { display: none; }
+    .aviso { background:#fff3cd; border:1px solid #ffe08a; color:#7a5b00; font-size:0.8rem; padding:0.6rem; border-radius:4px; margin-bottom:1rem; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h1>RITTUS ONE</h1>
+    <p>O ponto de partida para operações seguras</p>
+    <div id="avisoConfig" class="aviso hidden">
+      ⚠️ config.js ainda não foi preenchido com as credenciais reais do Supabase — veja o README.
+    </div>
+
+    <!-- FORMULÁRIO DE LOGIN -->
+    <form id="form-login">
+      <label for="login-email">E-mail</label>
+      <input type="email" id="login-email" required>
+
+      <label for="login-senha">Senha</label>
+      <input type="password" id="login-senha" required>
+
+      <button type="submit">Entrar</button>
+
+      <div class="toggle">
+        Ainda não tem conta? <a onclick="mostrarTela('cadastro')">Criar acesso</a>
+      </div>
+    </form>
+
+    <!-- FORMULÁRIO DE CADASTRO -->
+    <form id="form-cadastro" class="hidden">
+      <label for="cad-nome">Seu Nome</label>
+      <input type="text" id="cad-nome" placeholder="Ex: Alessandro Garcia" required>
+
+      <label for="cad-email">E-mail</label>
+      <input type="email" id="cad-email" required>
+
+      <label for="cad-senha">Senha (mínimo 6 caracteres)</label>
+      <input type="password" id="cad-senha" minlength="6" required>
+
+      <label for="cad-empresa">Nome da Empresa</label>
+      <input type="text" id="cad-empresa" placeholder="Ex: Minha Empresa LTDA" required>
+
+      <label for="cad-codigo">Código da equipe (Opcional)</label>
+      <input type="text" id="cad-codigo" placeholder="Deixe em branco se for o 1º acesso">
+
+      <button type="submit">Criar conta</button>
+
+      <div class="toggle">
+        Já tem uma conta? <a onclick="mostrarTela('login')">Fazer login</a>
+      </div>
+    </form>
+  </div>
+
+  <!-- config.js é script clássico (ver comentário no próprio arquivo) —
+       carrega antes do módulo abaixo e define window.RITTUS_SUPABASE_URL/KEY -->
+  <script src="config.js"></script>
+  <script type="module">
+    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+    if (!window.RITTUS_CONFIGURADO) {
+      document.getElementById('avisoConfig').classList.remove('hidden');
+    }
+
+    const supabase = createClient(window.RITTUS_SUPABASE_URL, window.RITTUS_SUPABASE_ANON_KEY);
+
+    // Se já tem sessão válida, pula direto pro app
+    supabase.auth.getSession().then(({ data }) => {
+      if (data && data.session) window.location.href = 'app.html';
+    });
+
+    window.mostrarTela = function(tela) {
+      if (tela === 'cadastro') {
+        document.getElementById('form-login').classList.add('hidden');
+        document.getElementById('form-cadastro').classList.remove('hidden');
+      } else {
+        document.getElementById('form-cadastro').classList.add('hidden');
+        document.getElementById('form-login').classList.remove('hidden');
+      }
+    };
+
+    // Cadastro
+    document.getElementById('form-cadastro').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const nome = document.getElementById('cad-nome').value;
+      const email = document.getElementById('cad-email').value;
+      const password = document.getElementById('cad-senha').value;
+      const organizacao = document.getElementById('cad-empresa').value;
+      const codigo_convite = document.getElementById('cad-codigo').value;
+
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { nome, organizacao, codigo_convite }
+        }
+      });
+
+      if (error) {
+        alert('Erro ao criar conta: ' + error.message);
+      } else {
+        alert('Conta criada com sucesso!');
+        window.location.href = 'app.html';
+      }
+    });
+
+    // Login
+    document.getElementById('form-login').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('login-email').value;
+      const password = document.getElementById('login-senha').value;
+
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+      if (error) {
+        alert('Erro ao entrar: ' + error.message);
+      } else {
+        window.location.href = 'app.html';
+      }
+    });
+  </script>
+</body>
+</html>
