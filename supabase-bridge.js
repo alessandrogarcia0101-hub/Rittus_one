@@ -60,7 +60,31 @@
     try {
       if (typeof window._mostrarToast === 'function') { window._mostrarToast(msg, tipo); return; }
     } catch (e) {}
-    console.log('[toast]', msg);
+    // Sem o toast do app disponível ainda (ex.: erro bem no início do carregamento) —
+    // mostra um aviso fixo na tela em vez de só no console, que ninguém vê.
+    try {
+      var div = document.createElement('div');
+      div.textContent = msg;
+      div.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:999999;background:#B00020;color:#fff;padding:10px 14px;border-radius:6px;font:13px/1.4 system-ui,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.3)';
+      document.body && document.body.appendChild(div);
+      setTimeout(function () { div.remove(); }, 6000);
+    } catch (e) { console.log('[toast]', msg); }
+  }
+
+  // Avisos de falha de SINCRONIZAÇÃO precisam ser VISÍVEIS — antes esse tipo de
+  // erro só ia pro console (ninguém vê no celular), e o dado parecia "salvo"
+  // porque a tela usa o cache local otimista mesmo quando o envio à nuvem falha.
+  // Isso foi identificado como a causa mais provável de "salva no meu aparelho
+  // mas não aparece no outro": a gravação no Supabase falhava (RLS, sessão
+  // expirada, sem internet) e o app não avisava ninguém.
+  var _ultimoAvisoVisivel = 0;
+  function avisar(msg) {
+    warn(msg);
+    var agora = Date.now();
+    if (agora - _ultimoAvisoVisivel > 4000) {
+      _ultimoAvisoVisivel = agora;
+      toast('⚠️ Não sincronizou com a nuvem: ' + msg + ' — os dados ficaram só neste aparelho por enquanto.', 'erro');
+    }
   }
 
   function dataUrlToBlob(dataUrl) {
@@ -114,7 +138,7 @@
     return {
       async carregar() {
         var { data, error } = await _sb.from(opts.table).select('*').eq('organizacao_id', window.__orgId).order('criado_em', { ascending: false });
-        if (error) { warn('carregar', opts.table, error.message); return []; }
+        if (error) { avisar('não consegui carregar ' + opts.table + ' (' + error.message + ')'); return []; }
         return (data || []).map(opts.fromRow);
       },
       async sincronizar(novoArray, cacheAnterior) {
@@ -133,16 +157,16 @@
             row.organizacao_id = window.__orgId;
             row.id_local = chave;
             var { error } = await _sb.from(opts.table).upsert(row, { onConflict: 'organizacao_id,id_local' });
-            if (error) warn('upsert falhou em', opts.table, chave, error.message);
-          } catch (e) { warn('toRow/upsert exception em', opts.table, chave, e); }
+            if (error) avisar('falha ao salvar em ' + opts.table + ' (' + error.message + ')');
+          } catch (e) { avisar('erro ao preparar dados de ' + opts.table + ' (' + (e && e.message || e) + ')'); }
         }
         // remove o que sumiu do array local
         for (var k in antigos) {
           if (!vistos[k]) {
             try {
               var { error: delErr } = await _sb.from(opts.table).delete().eq('organizacao_id', window.__orgId).eq('id_local', k);
-              if (delErr) warn('delete falhou em', opts.table, k, delErr.message);
-            } catch (e) { warn('delete exception em', opts.table, k, e); }
+              if (delErr) avisar('falha ao remover item de ' + opts.table + ' (' + delErr.message + ')');
+            } catch (e) { avisar('erro ao remover item de ' + opts.table + ' (' + (e && e.message || e) + ')'); }
           }
         }
       },
@@ -552,8 +576,8 @@
     }
 
     var motor = motores[chave];
-    if (!motor) { warn('sem motor de sincronização para a chave', chave, '— só ficou em memória nesta aba.'); return; }
-    motor.sincronizar(valor, anterior).catch(function (e) { warn('sincronizar', chave, e); });
+    if (!motor) { avisar('não sei salvar "' + chave + '" na nuvem — ficou só em memória nesta aba.'); return; }
+    motor.sincronizar(valor, anterior).catch(function (e) { avisar('falha ao sincronizar ' + chave + ' (' + (e && e.message || e) + ')'); });
   };
 
   // ------------------------------------------------------------------
@@ -568,9 +592,22 @@
     window.__userId = sessao.session.user.id;
 
     var { data: perfil, error: perfilErr } = await _sb.from('perfis').select('organizacao_id, nome, papel').eq('id', window.__userId).maybeSingle();
-    if (perfilErr || !perfil) { warn('não achou perfil do usuário logado', perfilErr); return; }
+    if (perfilErr || !perfil) { avisar('não encontrei seu perfil/organização no banco (' + (perfilErr && perfilErr.message || 'perfil vazio') + '). Você confirmou o e-mail de cadastro?'); return; }
     window.__orgId = perfil.organizacao_id;
     window.__perfil = perfil;
+
+    // DIAGNÓSTICO: mostra em qual organização este login está entrando.
+    // Se dois aparelhos deveriam compartilhar dados mas mostram nomes/códigos
+    // diferentes aqui, cada um criou sua PRÓPRIA organização (normalmente
+    // porque o 2º cadastro foi feito sem preencher "Código da equipe") —
+    // essa é a causa mais comum de "salva no meu aparelho, não aparece no outro".
+    try {
+      var { data: org } = await _sb.from('organizacoes').select('nome, codigo_convite').eq('id', window.__orgId).maybeSingle();
+      window.__orgInfo = org || null;
+      if (org) {
+        log('organização:', org.nome, '| código de equipe:', org.codigo_convite, '| usuário:', perfil.nome, '(' + perfil.papel + ')');
+      }
+    } catch (e) { warn('não consegui ler organizacoes para diagnóstico', e); }
 
     var [empresas, unidades, cfg] = await Promise.all([
       _sb.from('empresas').select('id, razao_social as nome, cnpj').eq('organizacao_id', window.__orgId),
@@ -610,4 +647,30 @@
     console.error('[bridge] falha ao carregar dados do Supabase:', e);
     toast('Não consegui carregar seus dados da nuvem. Verifique sua conexão e recarregue a página.', 'erro');
   });
+
+  // ------------------------------------------------------------------
+  // DIAGNÓSTICO — digite RITTUS_DEBUG() no Console do navegador (F12) e
+  // tire um print. Ajuda a comparar dois aparelhos: se `organizacao` ou
+  // `codigoEquipe` vierem diferentes nos dois, cada aparelho está numa
+  // conta separada — não é bug de sincronização, é login em contas
+  // diferentes (o 2º cadastro precisa do "Código da equipe" do 1º).
+  // ------------------------------------------------------------------
+  window.RITTUS_DEBUG = function () {
+    var info = {
+      logado: !!window.__userId,
+      organizacaoId: window.__orgId,
+      organizacao: window.__orgInfo ? window.__orgInfo.nome : '(não carregado)',
+      codigoEquipe: window.__orgInfo ? window.__orgInfo.codigo_convite : '(não carregado)',
+      usuario: window.__perfil ? (window.__perfil.nome + ' — ' + window.__perfil.papel) : '(não carregado)',
+      cachePronto: window.__cacheReady,
+      totaisNoCache: {},
+    };
+    Object.keys(window.__cache || {}).forEach(function (k) {
+      if (k.indexOf('__') === 0) return;
+      var v = window.__cache[k];
+      info.totaisNoCache[k] = Array.isArray(v) ? v.length + ' registro(s)' : typeof v;
+    });
+    console.log('[RITTUS_DEBUG]', info);
+    return info;
+  };
 })();
