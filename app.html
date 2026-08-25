@@ -3779,8 +3779,55 @@ global.MiniQR = {
      3) supabase-bridge.js (cria window._dbGet/_dbSet e window.RITTUS_READY)
      ═══════════════════════════════════════════════════════════ -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script src="config.js"></script>
-<script src="supabase-bridge.js"></script>
+<script src="config.js" onerror="console.warn('[RITTUS] config.js não encontrado — usando modo local (localStorage)')"></script>
+<script src="supabase-bridge.js" onerror="console.warn('[RITTUS] supabase-bridge.js não encontrado — usando modo local (localStorage)')"></script>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// MODO LOCAL DE SEGURANÇA (fallback) — evita "_dbGet is not defined"
+// ═══════════════════════════════════════════════════════════
+// A ponte com o Supabase (config.js + supabase-bridge.js) só existe quando
+// o app está publicado junto com esses dois arquivos (ex.: no Netlify). Ao
+// abrir este .html sozinho — direto do computador, em pré-visualização, ou
+// em qualquer hospedagem sem esses arquivos — os <script src> acima falham
+// silenciosamente e window._dbGet/_dbSet nunca são criados. Como o restante
+// do app chama _dbGet logo na primeira linha do próximo bloco de script,
+// isso travava a página inteira com "_dbGet is not defined".
+//
+// Este bloco só entra em ação se a ponte real não tiver carregado — se ela
+// carregar normalmente (app publicado), nada aqui é usado e o Supabase
+// continua funcionando exatamente como antes.
+if (typeof window._dbGet !== 'function' || typeof window._dbSet !== 'function') {
+  console.warn('[RITTUS] Ponte com a nuvem indisponível — operando em modo local (localStorage) neste dispositivo.');
+  window._dbGet = function (key, defaultValue) {
+    try {
+      var raw = localStorage.getItem(key);
+      if (raw === null || raw === undefined) return defaultValue;
+      return JSON.parse(raw);
+    } catch (e) {
+      console.error('[RITTUS] _dbGet (local) falhou para "' + key + '":', e.message);
+      return defaultValue;
+    }
+  };
+  window._dbSet = function (key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (e) {
+      console.error('[RITTUS] _dbSet (local) falhou para "' + key + '":', e.message);
+      return false;
+    }
+  };
+  // Não marcamos window.__cacheReady aqui de propósito: esse sinal existe só
+  // para o modo Supabase (dados chegam depois, de forma assíncrona, e um
+  // bloco no fim do arquivo re-sincroniza algumas variáveis a partir de
+  // window.__cache quando tudo chega). No modo local os dados já são lidos
+  // de forma síncrona e correta em cada ponto do app — não há nada para
+  // "esperar chegar". Deixar esse sinal de fora evita que aquele bloco
+  // final rode com um cache vazio e zere dados já carregados (ex.: os
+  // equipamentos de Combate a Incêndio).
+}
+</script>
 
 <script>
 // ── Captura global de erros — mostra visivelmente para diagnóstico ──
@@ -6348,19 +6395,12 @@ function _abrirJanelaPDF(d){
       +'</div>';
   }
 
-  // ── Capturar assinaturas ao vivo ─────────────────────────
-  function _getSig(canvasId, fallback) {
-    try {
-      var c = document.getElementById(canvasId);
-      if (c) {
-        var px = c.getContext('2d').getImageData(0,0,c.width,c.height).data;
-        for (var i=3;i<px.length;i+=4){ if(px[i]>0) return c.toDataURL('image/png'); }
-      }
-    } catch(e){}
-    return fallback || '';
-  }
-  var sigIns  = _getSig('sigInspetor',    d.sigInspetor    || '');
-  var sigResp = _getSig('sigResponsavel', d.sigResponsavel || '');
+  // ── Assinaturas: usar sempre o que foi salvo no registro (d.sigInspetor /
+  // d.sigResponsavel), já capturado corretamente por coletarDados() no momento
+  // da inspeção. Nunca reler o canvas ao vivo aqui — ao gerar o PDF a partir do
+  // Histórico, o canvas pode estar em branco ou pertencer a outra inspeção.
+  var sigIns  = d.sigInspetor    || '';
+  var sigResp = d.sigResponsavel || '';
   var nomeIns = d.nomeInspetor   || document.getElementById('sigNomeIns')?.textContent  || d.inspetor   || '—';
   var nomeResp= d.nomeResponsavel|| document.getElementById('sigNomeResp')?.textContent || d.responsavel|| '—';
   var dataAssin = d.dataAssinatura || new Date().toLocaleString('pt-BR');
@@ -6394,7 +6434,7 @@ function _abrirJanelaPDF(d){
 
         var stCor = (c.status==='cf'||c.status==='Conforme') ? '#2D7A3A'
                   : (c.status==='nc'||c.status==='Não Conforme') ? '#C0392B'
-                  : (c.status==='na'||c.status==='N/A') ? '#888'
+                  : (c.status==='na'||c.status==='N/A'||c.status==='Não Aplicável') ? '#888'
                   : (c.status==='pc'||c.status==='Parcialmente Conforme') ? '#E67E22'
                   : '#333';
 
@@ -7598,10 +7638,12 @@ function gerarPDFAuditoria() {
     var rows = cat.itens.map(function(item) {
       var st  = (_audState[item.id]||{}).status || '';
       var obs = (_audState[item.id]||{}).obs    || '';
+      var rec = (_audState[item.id]||{}).rec    || '';
       var acao= (_audState[item.id]||{}).acao   || '';
       var resp= (_audState[item.id]||{}).resp   || '';
       var praz= (_audState[item.id]||{}).prazo  || '';
       var crit= (_audState[item.id]||{}).crit   || '';
+      var link= (_audState[item.id]||{}).link   || '';
       var stLabel = {cf:'Conforme',nc:'Nao Conforme',pc:'Parcial',na:'N/A','':'Pendente'}[st]||'Pendente';
       var stCor   = {cf:'#2D7A3A',nc:'#C0392B',pc:'#E67E22',na:'#888','':'#bbb'}[st]||'#bbb';
       var bg      = {cf:'#f0faf2',nc:'#fdf0f0',pc:'#fef9e7',na:'#fafafa','':'white'}[st]||'white';
@@ -7611,17 +7653,38 @@ function gerarPDFAuditoria() {
         + '<td style="padding:4px 7px;font-size:10px;font-weight:700;color:' + stCor + '">' + stLabel + '</td>'
         + '<td style="padding:4px 7px;font-size:9px">' + (crit||'—') + '</td>'
         + '<td style="padding:4px 7px;font-size:9px">' + (obs||'—') + '</td>'
+        + '<td style="padding:4px 7px;font-size:9px">' + (rec||'—') + '</td>'
         + '<td style="padding:4px 7px;font-size:9px">' + (acao||'—') + '</td>'
         + '<td style="padding:4px 7px;font-size:9px">' + (resp||'—') + '</td>'
         + '<td style="padding:4px 7px;font-size:9px">' + (praz||'—') + '</td>'
+        + '<td style="padding:4px 7px;font-size:9px;color:#1565C0">' + (link||'—') + '</td>'
         + '</tr>';
     }).join('');
     return '<div style="margin-bottom:16px">'
       + '<div style="background:' + cat.cor + ';color:white;padding:6px 12px;border-radius:4px 4px 0 0;font-weight:700;font-size:12px">' + cat.icon + ' ' + cat.titulo + '</div>'
       + '<table style="width:100%;border-collapse:collapse;font-size:10px">'
-      + '<thead><tr style="background:#f5f5f0"><th style="padding:4px 7px;text-align:left">Cód.</th><th>Requisito</th><th>Status</th><th>Criticidade</th><th>Evidência</th><th>Ação</th><th>Resp.</th><th>Prazo</th></tr></thead>'
+      + '<thead><tr style="background:#f5f5f0"><th style="padding:4px 7px;text-align:left">Cód.</th><th>Requisito</th><th>Status</th><th>Criticidade</th><th>Evidência</th><th>Recomendação</th><th>Ação</th><th>Resp.</th><th>Prazo</th><th>Link</th></tr></thead>'
       + '<tbody>' + rows + '</tbody></table></div>';
   }).join('');
+
+  // Fotos anexadas por item — antes não apareciam em lugar nenhum do relatório.
+  var fotosAuditoriaHTML = '';
+  var itemsComFoto = [];
+  AUD_CHECKLIST.forEach(function(cat) {
+    cat.itens.forEach(function(item) {
+      var fotos = _audFotos[item.id];
+      if (fotos && fotos.length) itemsComFoto.push({ cod: item.cod, fotos: fotos });
+    });
+  });
+  if (itemsComFoto.length) {
+    fotosAuditoriaHTML = '<div style="background:#0D1B2A;color:#FF6B00;padding:8px 12px;border-radius:4px;font-weight:700;font-size:12px;margin:16px 0 10px">📷 Evidências Fotográficas</div>'
+      + itemsComFoto.map(function(it) {
+          return '<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:700;color:#666;margin-bottom:4px">' + it.cod + '</div>'
+            + '<div style="display:flex;flex-wrap:wrap;gap:8px">'
+            + it.fotos.map(function(f){ return '<img src="' + f.url + '" style="width:130px;height:95px;object-fit:cover;border-radius:4px;border:1px solid #ddd">'; }).join('')
+            + '</div></div>';
+        }).join('');
+  }
 
   var corPct = pct>=85?'#2D7A3A':pct>=70?'#E67E22':'#C0392B';
 
@@ -7657,6 +7720,7 @@ function gerarPDFAuditoria() {
     + '<div style="background:#0D1B2A;color:white;padding:8px 12px;border-radius:4px;display:flex;justify-content:space-between;margin-bottom:14px">'
     + '<span style="font-weight:700">RESULTADO GERAL</span><span style="color:#FF6B00;font-weight:700">' + resultadoTxt + '</span></div>'
     + catRows
+    + fotosAuditoriaHTML
     + '<div style="margin-top:14px"><strong>Conclusao do Auditor:</strong><p style="margin-top:4px">' + (document.getElementById('aud-conclusao').value||'—') + '</p></div>'
     + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px">'
     + '<div><div style="font-size:10px;color:#666;margin-bottom:4px">Auditor: <strong>' + (document.getElementById('aud-auditor').value||'—') + '</strong></div><div class="sig-area"></div></div>'
@@ -7864,10 +7928,18 @@ function salvarPT() {
 
 function gerarPDFPT() {
   // Coletar dados
-  var riscos = Array.from(document.querySelectorAll('#ptRiscosList .equipe-item input[type=text]')).map(function(i){ return i.value; }).filter(Boolean);
+  var riscos = Array.from(document.querySelectorAll('#ptRiscosList .equipe-item')).map(function(el){
+    var txt = el.querySelector('input[type=text]')?.value || '';
+    var grau = el.querySelector('select')?.value || '';
+    return txt ? (txt + (grau ? ' — Grau: ' + grau : '')) : '';
+  }).filter(Boolean);
   var controles = Array.from(document.querySelectorAll('#ptControlesList .equipe-item input[type=text]')).map(function(i){ return i.value; }).filter(Boolean);
   var epis = Array.from(document.querySelectorAll('#ptEPIsList input[type=text]')).map(function(i){ return i.value; }).filter(Boolean);
   var epcs = Array.from(document.querySelectorAll('#ptEPCsList input[type=text]')).map(function(i){ return i.value; }).filter(Boolean);
+  var equipe = Array.from(document.querySelectorAll('#ptEquipeList .equipe-item')).map(function(el){
+    var campos = el.querySelectorAll('input[type=text]');
+    return { nome: campos[0]?.value||'', funcao: campos[1]?.value||'', doc: campos[2]?.value||'' };
+  }).filter(function(m){ return m.nome || m.funcao || m.doc; });
 
   var html = '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>PT ' + _ptTipo + '</title>'
     + '<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:11px;padding:16px}'
@@ -7887,6 +7959,7 @@ function gerarPDFPT() {
     + '<div class="g3"><div class="f"><label>Nº PT</label><span>' + (document.getElementById('pt-num').value||'—') + '</span></div>'
     + '<div class="f"><label>Data</label><span>' + (document.getElementById('pt-data').value||'—') + '</span></div>'
     + '<div class="f"><label>Hora Início</label><span>' + (document.getElementById('pt-hora-inicio').value||'—') + '</span></div>'
+    + '<div class="f"><label>Hora Término</label><span>' + (document.getElementById('pt-hora-fim').value||'—') + '</span></div>'
     + '<div class="f"><label>Empresa Contratante</label><span>' + (document.getElementById('pt-contratante').value||'—') + '</span></div>'
     + '<div class="f"><label>Contratada</label><span>' + (document.getElementById('pt-contratada').value||'—') + '</span></div>'
     + '<div class="f"><label>Unidade</label><span>' + (document.getElementById('pt-unidade').value||'—') + '</span></div>'
@@ -7898,7 +7971,13 @@ function gerarPDFPT() {
     + '<ul style="margin-bottom:10px;padding-left:16px">' + controles.map(function(c){ return '<li style="margin-bottom:3px">' + c + '</li>'; }).join('') + '</ul>'
     + '<div class="sec">5. EPIs</div><div style="margin-bottom:10px">' + epis.map(function(e){ return '<span class="tag tag-epi">' + e + '</span>'; }).join('') + '</div>'
     + '<div class="sec">6. EPCs</div><div style="margin-bottom:10px">' + epcs.map(function(e){ return '<span class="tag tag-epc">' + e + '</span>'; }).join('') + '</div>'
-    + '<div class="sec">7. Assinaturas</div>'
+    + '<div class="sec">7. Equipe Envolvida</div>'
+    + (equipe.length
+        ? '<table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:10px"><thead><tr style="background:#f5f5f0"><th style="padding:4px 7px;text-align:left">Nome</th><th style="padding:4px 7px;text-align:left">Função</th><th style="padding:4px 7px;text-align:left">CPF/Matrícula</th></tr></thead><tbody>'
+          + equipe.map(function(m){ return '<tr style="border-bottom:1px solid #eee"><td style="padding:4px 7px">' + (m.nome||'—') + '</td><td style="padding:4px 7px">' + (m.funcao||'—') + '</td><td style="padding:4px 7px">' + (m.doc||'—') + '</td></tr>'; }).join('')
+          + '</tbody></table>'
+        : '<p style="margin-bottom:10px;color:#888">Nenhum membro cadastrado.</p>')
+    + '<div class="sec">8. Assinaturas</div>'
     + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:8px">'
     + Array.from(document.querySelectorAll('[id^="pt-sig-wrap-"]')).map(function(w){
         var nome  = w.querySelector('[id^="pt-sig-nome-"]')?.value  || '—';
@@ -8103,7 +8182,11 @@ function gerarPDFAPR() {
     + '<div class="sec">3. EPCs</div><div style="margin-bottom:10px">' + epcs.map(function(e){ return '<span class="tag tag-epc">' + e + '</span>'; }).join('') + (epcs.length?'':'<span style="color:#888">Nenhum</span>') + '</div>'
     + '<div class="sec">4. Etapas · Perigos · Riscos · Controles</div>'
     + '<table><thead><tr><th>Etapa</th><th>Perigos</th><th>Riscos</th><th>Consequências</th><th>Controles</th><th>Grau</th><th>Responsável</th></tr></thead><tbody>' + etapasHTML + '</tbody></table>'
-    + '<div class="sec">5. Assinaturas</div>'
+    + '<div class="sec">5. Evidências Fotográficas</div>'
+    + (_aprFotos.length
+        ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">' + _aprFotos.map(function(f){ return '<img src="' + f.url + '" style="width:150px;height:110px;object-fit:cover;border-radius:4px;border:1px solid #ddd">'; }).join('') + '</div>'
+        : '<p style="margin-bottom:10px;color:#888">Nenhuma foto anexada.</p>')
+    + '<div class="sec">6. Assinaturas</div>'
     + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:8px">'
     + Array.from(document.querySelectorAll('[id^="apr-sig-wrap-"]')).map(function(w){
         var nome  = w.querySelector('[id^="apr-sig-nome-"]')?.value  || '—';
@@ -8759,6 +8842,29 @@ function _ciGerarPDF(titulo, prefixo, campos, checklistIds, sigId, fotos) {
     return '<div class="f"><label>' + c.l + '</label><span>' + (c.v||'—') + '</span></div>';
   }).join('');
 
+  // Checklist do item — antes o parâmetro checklistIds era recebido mas nunca
+  // usado, então nenhuma resposta (Conforme/Não Conforme/N/A + observação)
+  // aparecia no relatório.
+  var checklistHTML = '';
+  if (checklistIds && checklistIds.length) {
+    var totalCk = 0, cfCk = 0, ncCk = 0;
+    var linhasCk = checklistIds.map(function(it, i){
+      if (it.status) { totalCk++; if(it.status==='Conforme') cfCk++; else if(it.status==='Não Conforme') ncCk++; }
+      var stLabel = it.status || 'Não avaliado';
+      var stCor = it.status==='Conforme' ? '#2D7A3A' : it.status==='Não Conforme' ? '#C0392B' : it.status==='N/A' ? '#888' : '#bbb';
+      var bg = i%2===0 ? 'white' : '#fafafa';
+      return '<tr style="background:' + bg + ';border-bottom:1px solid #eee">'
+        + '<td style="padding:5px 7px;font-size:10px">' + it.label + '</td>'
+        + '<td style="padding:5px 7px;font-size:10px;font-weight:700;color:' + stCor + '">' + stLabel + '</td>'
+        + '<td style="padding:5px 7px;font-size:10px">' + (it.obs||'—') + '</td>'
+        + '</tr>';
+    }).join('');
+    checklistHTML = '<div class="sec">Checklist de Inspeção (' + cfCk + ' conforme, ' + ncCk + ' não conforme, de ' + checklistIds.length + ' itens)</div>'
+      + '<table style="width:100%;border-collapse:collapse;margin-bottom:14px">'
+      + '<thead><tr style="background:#f5f5f0"><th style="padding:5px 7px;text-align:left;font-size:10px">Item</th><th style="padding:5px 7px;text-align:left;font-size:10px">Status</th><th style="padding:5px 7px;text-align:left;font-size:10px">Observação</th></tr></thead>'
+      + '<tbody>' + linhasCk + '</tbody></table>';
+  }
+
   var sigHTML = sigDataUrl
     ? '<div style="margin-top:16px"><div style="font-size:10px;color:#666;margin-bottom:4px">Assinatura do Responsável:</div><img src="' + sigDataUrl + '" style="height:60px;border:1px solid #ddd;border-radius:4px;background:#fafafa"></div>'
     : '<div style="margin-top:16px"><div style="font-size:10px;color:#666;margin-bottom:4px">Assinatura do Responsável:</div><div style="border:1px solid #ddd;height:60px;border-radius:4px;background:#fafafa"></div></div>';
@@ -8777,6 +8883,7 @@ function _ciGerarPDF(titulo, prefixo, campos, checklistIds, sigId, fotos) {
     + '<div class="no-print"><button onclick="window.print()" style="padding:8px 18px;background:#B71C1C;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:700">🖨 Imprimir / Salvar PDF</button></div>'
     + '<div class="sec">Dados da Inspeção</div>'
     + '<div class="g3">' + camposHTML + '</div>'
+    + checklistHTML
     + fotosHTML
     + sigHTML
     + '<div style="margin-top:16px;font-size:9px;color:#aaa;border-top:1px solid #eee;padding-top:7px;text-align:center">RITTUS ONE · Sistema de Gestão de Combate a Incêndio</div></body></html>';
@@ -8810,7 +8917,30 @@ function _pdfInspecaoCI() {
     return {l: (el ? (el.labels && el.labels[0] ? el.labels[0].textContent : id) : id), v: el ? el.value : '—'};
   });
   var sigId = 'ins-' + {extintores:'ext',hidrantes:'hid',alarme:'alr',sprinklers:'spr',bombas:'bmb',geral:'ger'}[_ciModuloAtual] + '-sig';
-  _ciGerarPDF(labels[_ciModuloAtual]||'Inspeção CI', _ciModuloAtual, campos, [], sigId, _ciFotos);
+
+  // Checklist específico do módulo — antes ficava de fora do PDF; agora entra
+  // com status (Conforme/Não Conforme/N/A) e observação de cada item.
+  var checklistPorModulo = {
+    extintores: CI_CHECKLIST_EXTINTOR, hidrantes: CI_CHECKLIST_HIDRANTE,
+    alarme: CI_CHECKLIST_ALARME, sprinklers: CI_CHECKLIST_SPRINKLER,
+    bombas: CI_CHECKLIST_BOMBAS, geral: CI_CHECKLIST_GERAL,
+  };
+  var checklistArr = checklistPorModulo[_ciModuloAtual] || [];
+  var checklistData = checklistArr.map(function(it){
+    var itemId = it[0], label = it[1];
+    var sel = document.querySelector('input[name="ci-'+itemId+'"]:checked');
+    var obsEl = document.getElementById('ci-obs-'+itemId);
+    return { id: itemId, label: label, status: sel ? sel.value : '', obs: obsEl ? obsEl.value : '' };
+  });
+
+  var camposExtras = [];
+  var testeMap = {alarme:'ins-alr-teste', bombas:'ins-bmb-teste'};
+  if (testeMap[_ciModuloAtual]) {
+    var testeEl = document.getElementById(testeMap[_ciModuloAtual]);
+    if (testeEl && testeEl.value) camposExtras.push({l:'Registro do Teste', v:testeEl.value});
+  }
+
+  _ciGerarPDF(labels[_ciModuloAtual]||'Inspeção CI', _ciModuloAtual, campos.concat(camposExtras), checklistData, sigId, _ciFotos);
 }
 
 // Atualizar dashboard CI no renderHomeStats
@@ -9627,9 +9757,12 @@ function gerarPDFDocs() {
   var num      = document.getElementById('doc-num')?.value || '—';
 
   var total=0, conf=0, nc=0, na=0;
+  var itensComFotoDoc = [];
   var linhas = dados.itens.map(function(item) {
     var st = (_docItensState[item.id]||{}).status || '';
     var obs = (_docItensState[item.id]||{}).obs || '';
+    var rec = (_docItensState[item.id]||{}).rec || '';
+    var link = (_docItensState[item.id]||{}).link || '';
     var prazo = (_docItensState[item.id]||{}).prazo || '';
     var resp2 = (_docItensState[item.id]||{}).resp || '';
     if (st) { total++;
@@ -9637,6 +9770,7 @@ function gerarPDFDocs() {
       else if(st==='nc')nc++;
       else na++;
     }
+    if (_docFotos[item.id] && _docFotos[item.id].length) itensComFotoDoc.push({ id: item.id, fotos: _docFotos[item.id] });
     var stLabel = {cf:'Conforme',nc:'Não Conforme',na:'N/A','':'Não avaliado'}[st]||'Não avaliado';
     var stCor   = {cf:'#2D7A3A',nc:'#C0392B',na:'#888','':'#bbb'}[st]||'#bbb';
     var bg      = {cf:'#f0faf2',nc:'#fdf0f0',na:'#fafafa','':'white'}[st]||'white';
@@ -9645,10 +9779,20 @@ function gerarPDFDocs() {
       + '<td style="padding:5px 8px;font-size:10px">' + item.pergunta + '</td>'
       + '<td style="padding:5px 8px;font-size:10px;font-weight:700;color:' + stCor + '">' + stLabel + '</td>'
       + '<td style="padding:5px 8px;font-size:9px;color:#666">' + (obs||'—') + '</td>'
+      + '<td style="padding:5px 8px;font-size:9px;color:#666">' + (rec||'—') + '</td>'
       + '<td style="padding:5px 8px;font-size:9px">' + (resp2||'—') + '</td>'
       + '<td style="padding:5px 8px;font-size:9px">' + (prazo||'—') + '</td>'
+      + '<td style="padding:5px 8px;font-size:9px;color:#0077B6">' + (link||'—') + '</td>'
       + '</tr>';
   }).join('');
+  var fotosDocHTML = '';
+  if (itensComFotoDoc.length) {
+    fotosDocHTML = '<div class="sec">Evidências Fotográficas</div>'
+      + itensComFotoDoc.map(function(it) {
+          return '<div style="margin-bottom:10px"><div style="font-size:10px;font-weight:700;color:#666;margin-bottom:4px">' + it.id + '</div>'
+            + '<div style="display:flex;flex-wrap:wrap;gap:8px">' + it.fotos.map(function(f){ return '<img src="' + f.url + '" style="width:130px;height:95px;object-fit:cover;border-radius:4px;border:1px solid #ddd">'; }).join('') + '</div></div>';
+        }).join('');
+  }
 
   var pct = total>0 ? Math.round(conf/total*100) : 0;
   var corPct = pct>=85?'#2D7A3A':pct>=70?'#E67E22':'#C0392B';
@@ -9676,7 +9820,8 @@ function gerarPDFDocs() {
     + '<div style="border:1px solid #ddd;border-radius:4px;padding:10px;text-align:center;min-width:80px"><div class="score" style="color:' + corPct + '">' + pct + '%</div><div style="font-size:9px;color:#888;text-transform:uppercase">Conformidade</div></div>'
     + '</div>'
     + '<div class="sec">Checklist — ' + titulo + '</div>'
-    + '<table><thead><tr><th>Código</th><th>Requisito</th><th>Status</th><th>Observação</th><th>Responsável</th><th>Prazo</th></tr></thead><tbody>' + linhas + '</tbody></table>'
+    + '<table><thead><tr><th>Código</th><th>Requisito</th><th>Status</th><th>Observação</th><th>Recomendação</th><th>Responsável</th><th>Prazo</th><th>Link/Evidência</th></tr></thead><tbody>' + linhas + '</tbody></table>'
+    + fotosDocHTML
     + '<div style="margin-top:16px;font-size:9px;color:#aaa;border-top:1px solid #eee;padding-top:7px;text-align:center">RITTUS ONE · Biblioteca Inteligente de Documentos e Licenças · ' + new Date().toLocaleString('pt-BR') + ' · 🔵 Itens AM = Requisitos Regionais Amazonas/Manaus</div></body></html>';
 
   var blob = new Blob([h], {type:'text/html;charset=utf-8'});
@@ -10209,11 +10354,19 @@ function _injetarBtnsNR() {
     // Montar nav-bar
     nb.innerHTML = '';
     var w = document.createElement('div');
-    w.style.cssText = 'display:flex;align-items:center;justify-content:space-between;width:100%;gap:8px';
+    w.style.cssText = 'display:flex;align-items:center;justify-content:space-between;width:100%;gap:8px;flex-wrap:wrap';
     var lbl = document.createElement('span');
     lbl.style.cssText = 'font-size:12px;color:#888;font-family:Barlow Condensed,sans-serif';
     lbl.textContent = (posIdx+1)+'/'+seqCompleta.length;
-    w.appendChild(btnPrev); w.appendChild(lbl); w.appendChild(btnNext);
+    w.appendChild(btnPrev); w.appendChild(lbl);
+    if (ehUltima) {
+      var btnPreviewPdf = document.createElement('button');
+      btnPreviewPdf.type = 'button'; btnPreviewPdf.className = 'btn btn-pdf';
+      btnPreviewPdf.textContent = '📄 Pré-visualizar PDF';
+      btnPreviewPdf.onclick = function(){ if(typeof gerarPDF==='function') gerarPDF(); };
+      w.appendChild(btnPreviewPdf);
+    }
+    w.appendChild(btnNext);
     nb.appendChild(w);
   });
 }
@@ -10289,28 +10442,37 @@ function _finalizarInspecaoMultimoduloV2() {
   var unidade  = dadosSel.unidade || dadosNR.unidade || document.getElementById('unidade')?.value || '';
   var resumo   = {};
   if(typeof coletarDados==='function'){try{resumo=coletarDados();}catch(e){}}
-  var registro = {
-    id:           dadosSel.num || ('INSP-'+Date.now()),
+  // IMPORTANTE: parte de TODOS os dados coletados (checklist, planoAcao, riscos,
+  // assinaturas, CNPJ, atividade, observações etc.) e só sobrepõe os campos
+  // específicos do fluxo multi-módulo. Antes esses dados eram descartados e o
+  // registro salvo no histórico ficava só com o resumo — por isso o PDF/Excel
+  // gerado depois vinha praticamente vazio.
+  var registro = Object.assign({}, resumo, {
+    id:           dadosSel.num || resumo.id || ('INSP-'+Date.now()),
     timestamp:    new Date().toISOString(),
-    data:         dadosSel.data || new Date().toISOString().slice(0,10),
-    hora:         dadosSel.hora || new Date().toTimeString().slice(0,5),
+    data:         dadosSel.data || resumo.data || new Date().toISOString().slice(0,10),
+    hora:         dadosSel.hora || resumo.hora || new Date().toTimeString().slice(0,5),
     empresa:      empresa,
     unidade:      unidade,
-    setor:        dadosSel.setor || dadosNR.setor || '',
-    inspetor:     dadosSel.inspetor || dadosNR.inspetor || document.getElementById('inspetor')?.value || '',
+    setor:        dadosSel.setor || dadosNR.setor || resumo.setor || '',
+    inspetor:     dadosSel.inspetor || dadosNR.inspetor || resumo.inspetor || document.getElementById('inspetor')?.value || '',
+    responsavel:  dadosSel.acompanhante || resumo.responsavel || '',
     acompanhante: dadosSel.acompanhante || '',
-    tipoInspecao: dadosSel.tipoInspecao || _selTipoInsp || '',
+    tipoInspecao: dadosSel.tipoInspecao || _selTipoInsp || resumo.tipoInspecao || '',
     modalidades:  _selModalidades.slice(),
     modulos:      _multiModuloFila.map(function(m){ return (MODULO_CONFIG[m]||{}).nome||m; }),
     nrsSelecionadas: Array.from(_nrsSelecionadas).join(', '),
     tipo:         'multi',
     status:       'Concluída',
     naoConformes: parseInt(resumo.naoConformes||0),
+    conformes:    resumo.conformes || '0',
+    naoAplicaveis: resumo.naoAplicaveis || '0',
+    totalItens:   resumo.totalItens || '0',
     pctConformidade: resumo.pctConformidade || '—',
-    avaliacaoGeral: parseInt(resumo.naoConformes||0)===0 ? 'Aprovada' : 'Com pendências',
+    avaliacaoGeral: resumo.avaliacaoGeral || (parseInt(resumo.naoConformes||0)===0 ? 'Aprovada' : 'Com pendências'),
     sigInspetor:  resumo.sigInspetor || '',
     sigResponsavel: resumo.sigResponsavel || '',
-  };
+  });
   var hist = _dbGet('sst_inspecoes', []);
   hist.unshift(registro);
   _dbSet('sst_inspecoes', hist);
