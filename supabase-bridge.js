@@ -610,7 +610,7 @@
     } catch (e) { warn('não consegui ler organizacoes para diagnóstico', e); }
 
     var [empresas, unidades, cfg] = await Promise.all([
-      _sb.from('empresas').select('id, razao_social as nome, cnpj').eq('organizacao_id', window.__orgId),
+      _sb.from('empresas').select('id, nome:razao_social, cnpj').eq('organizacao_id', window.__orgId),
       _sb.from('unidades').select('id, nome, cnpj, empresa_id').eq('organizacao_id', window.__orgId),
       carregarConfigGeral(),
     ]);
