@@ -3799,6 +3799,16 @@ global.MiniQR = {
 // continua funcionando exatamente como antes.
 if (typeof window._dbGet !== 'function' || typeof window._dbSet !== 'function') {
   console.warn('[RITTUS] Ponte com a nuvem indisponível — operando em modo local (localStorage) neste dispositivo.');
+	js
+   (function () {
+     try {
+       var banner = document.createElement('div');
+       banner.textContent = '⚠️ SEM CONEXÃO COM O BANCO DE DADOS — os dados de hoje estão sendo salvos SÓ NESTE APARELHO e não vão aparecer nos outros. Verifique sua internet e recarregue a página. Se persistir, avise o suporte.';
+       banner.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:999999;background:#B00020;color:#fff;padding:10px 14px;font:13px/1.4 system-ui,sans-serif;text-align:center;box-shadow:0 2px 10px rgba(0,0,0,.3)';
+       document.addEventListener('DOMContentLoaded', function () { document.body && document.body.prepend(banner); });
+       if (document.body) document.body.prepend(banner);
+     } catch (e) { console.error('[RITTUS] falhou ao mostrar aviso visível de modo local', e); }
+   })();
   window._dbGet = function (key, defaultValue) {
     try {
       var raw = localStorage.getItem(key);
