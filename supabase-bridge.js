@@ -79,6 +79,7 @@
   // expirada, sem internet) e o app não avisava ninguém.
   var _ultimoAvisoVisivel = 0;
   function avisar(msg) {
+           try { alert('ERRO RITTUS (diagnóstico): ' + msg); } catch (e) {}
     warn(msg);
     var agora = Date.now();
     if (agora - _ultimoAvisoVisivel > 4000) {
